@@ -8,9 +8,9 @@ BUILD := build
 
 VFLAGS := --cc --exe --build -Wall -Wno-UNUSEDSIGNAL -j 4 -Irtl
 
-.PHONY: smoke hello clean test-alu test-regfile test-unit test-regfile-xinit lint synth
+.PHONY: smoke hello clean test-alu test-regfile test-unit test-regfile-xinit test-imm test-decoder lint synth
 
-# 单元测试：make test-alu / make test-regfile / make test-unit（ALU、寄存器堆、随机初值三个都跑）
+# 单元测试：make test-alu / test-regfile / test-imm / test-decoder；make test-unit 全部都跑
 test-alu:
 	mkdir -p $(BUILD)/alu
 	verilator $(VFLAGS) --Mdir $(BUILD)/alu --top-module alu \
@@ -23,7 +23,19 @@ test-regfile:
 	  rtl/regfile.sv sim/unit/tb_regfile.cpp
 	$(BUILD)/regfile/Vregfile
 
-test-unit: test-alu test-regfile test-regfile-xinit
+test-imm:
+	mkdir -p $(BUILD)/imm_gen
+	verilator $(VFLAGS) --Mdir $(BUILD)/imm_gen --top-module imm_gen \
+	  rtl/core_pkg.sv rtl/imm_gen.sv sim/unit/tb_imm_gen.cpp
+	$(BUILD)/imm_gen/Vimm_gen
+
+test-decoder:
+	mkdir -p $(BUILD)/decoder
+	verilator $(VFLAGS) --Mdir $(BUILD)/decoder --top-module decoder \
+	  rtl/core_pkg.sv rtl/decoder.sv sim/unit/tb_decoder.cpp
+	$(BUILD)/decoder/Vdecoder
+
+test-unit: test-alu test-regfile test-regfile-xinit test-imm test-decoder
 
 # 寄存器上电初值随机化：抓“依赖初值为 0”的设计（例如 x0 只靠写时挡住）
 test-regfile-xinit:
@@ -33,14 +45,14 @@ test-regfile-xinit:
 	$(BUILD)/regfile_xinit/Vregfile +verilator+rand+reset+2 +verilator+seed+20261010
 
 # 代码检查：只做 lint，不生成仿真模型
-RTL_SRCS := rtl/core_pkg.sv rtl/alu.sv rtl/regfile.sv
+RTL_SRCS := rtl/core_pkg.sv rtl/alu.sv rtl/regfile.sv rtl/imm_gen.sv rtl/decoder.sv
 lint:
-	for m in alu regfile; do \
+	for m in alu regfile imm_gen decoder; do \
 	  verilator --lint-only -Wall -Wno-UNUSEDSIGNAL -Irtl --top-module $$m $(RTL_SRCS) || exit 1; \
 	done
 	@echo "lint: 0 warnings"
 
-# 开源综合（Yosys + slang 前端）：看面积（单元数）和逻辑深度。SYNTH_TOP=alu 或 regfile
+# 开源综合（Yosys + slang 前端）：看面积（单元数）和逻辑深度。SYNTH_TOP=alu / regfile / imm_gen / decoder
 YOSYS ?= yowasp-yosys
 SYNTH_TOP ?= alu
 synth:

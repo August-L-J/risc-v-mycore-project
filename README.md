@@ -5,11 +5,21 @@
 ![HDL](https://img.shields.io/badge/HDL-SystemVerilog-informational)
 ![sim](https://img.shields.io/badge/sim-Verilator%205.052-success)
 
-> **English summary.** A hand-written RV32I processor core in SystemVerilog, built step by step from a single-cycle design toward a 5-stage pipeline. The single-cycle core is complete: it executes all 40 RV32I base instructions, passes randomized differential unit tests for every module and five whole-core test programs (including a compiled C program), is lint-clean under `verilator -Wall`, and is synthesized with Yosys to track area and logic depth. **This project is under active development**; next steps are riscv-tests, a DiffTest reference model, and the 5-stage pipeline with forwarding and hazard handling.
+> **English summary.** A hand-written RV32I processor core in SystemVerilog, built step by step from a single-cycle design toward a 5-stage pipeline. All processor RTL is written by the author; the verification infrastructure (testbenches, memory model, Makefile, test programs) was built with AI assistance (Claude). The single-cycle core is complete: it executes all 40 RV32I base instructions, passes randomized differential unit tests for every module and five whole-core test programs (including a compiled C program), is lint-clean under `verilator -Wall`, and is synthesized with Yosys to track area and logic depth. **This project is under active development**; next steps are riscv-tests, a DiffTest reference model, and the 5-stage pipeline with forwarding and hazard handling.
 
 **状态：持续开发中。** 单周期核已完成（2026-10-23），正在推进验证基础设施和五级流水。进度见下面的[路线图](#路线图)，最后更新：2026-10-23。
 
 作者：罗文轩，中国科学院大学电子信息专业在读硕士研究生。
+
+## 分工说明
+
+| 部分 | 文件 | 由谁完成 |
+|---|---|---|
+| 处理器 RTL：ALU、寄存器堆、立即数生成、译码器、访存单元、单周期顶层 | `rtl/*.sv`（`core_pkg.sv` 的类型定义除外） | **本人手写** |
+| 设计决策、调试定位、综合结果分析 | — | **本人** |
+| 测试平台、仿真存储器、Makefile、测试程序 | `sim/`、`sw/`、`Makefile`、`rtl/core_pkg.sv` | 借助 AI（Claude）编写，本人阅读理解并使用 |
+
+处理器核心逻辑全部自己写：AI 只讲原理、给提示、审查代码，不提供 RTL 实现。验证基础设施用 AI 加快搭建，把时间集中在微架构本身。每次提交的信息里都写明了这一分工。
 
 ## 项目简介
 
@@ -20,7 +30,7 @@
 3. **lint 零警告**：`verilator --lint-only -Wall`。
 4. **综合**：Yosys 综合，记录单元数和最长逻辑深度，用数字评估面积和时序。
 
-## 当前成果（单周期核）
+## 当前成果：单周期核
 
 | 项目 | 结果 |
 |---|---|
@@ -59,11 +69,11 @@
 
 ```
 mycore/
-├── rtl/                  处理器 RTL（手写）
-│   ├── core_pkg.sv       控制信号枚举类型
+├── rtl/                  处理器 RTL（本人手写）
+│   ├── core_pkg.sv       控制信号枚举类型（AI 辅助）
 │   ├── alu.sv  regfile.sv  imm_gen.sv  decoder.sv  lsu.sv
 │   └── core_top.sv       单周期顶层
-├── sim/
+├── sim/                  验证基础设施（AI 辅助）
 │   ├── unit/             各模块的随机对拍测试平台（C++）
 │   ├── core/             整核仿真：存储器模型、soc_top、测试平台、hex 转换脚本
 │   └── smoke/            工具链冒烟测试

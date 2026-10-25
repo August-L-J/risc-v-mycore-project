@@ -4,10 +4,11 @@
 ![ISA](https://img.shields.io/badge/ISA-RV32I-blue)
 ![HDL](https://img.shields.io/badge/HDL-SystemVerilog-informational)
 ![sim](https://img.shields.io/badge/sim-Verilator%205.052-success)
+![riscv-tests](https://img.shields.io/badge/riscv--tests%20rv32ui-40%2F42%20pass%20%282%20out%20of%20scope%29-brightgreen)
 
-> **English summary.** A hand-written RV32I processor core in SystemVerilog, built step by step from a single-cycle design toward a 5-stage pipeline. All processor RTL is written by the author; the verification infrastructure (testbenches, memory model, Makefile, test programs) was built with AI assistance (Claude). The single-cycle core is complete: it executes all 40 RV32I base instructions, passes randomized differential unit tests for every module and five whole-core test programs (including a compiled C program), is lint-clean under `verilator -Wall`, and is synthesized with Yosys to track area and logic depth. **This project is under active development**; next steps are riscv-tests, a DiffTest reference model, and the 5-stage pipeline with forwarding and hazard handling.
+> **English summary.** A hand-written RV32I processor core in SystemVerilog, built step by step from a single-cycle design toward a 5-stage pipeline. All processor RTL is written by the author; the verification infrastructure (testbenches, memory model, Makefile, test programs) was built with AI assistance (Claude). The single-cycle core is complete: it executes all 40 RV32I base instructions, passes randomized differential unit tests for every module and five whole-core test programs (including a compiled C program), passes all 40 applicable riscv-tests rv32ui cases (fence_i and ma_data are intentionally out of scope for now), is lint-clean under `verilator -Wall`, and is synthesized with Yosys to track area and logic depth. A mutation experiment (14 injected RTL bugs) was used to check what the test suites can and cannot catch. **This project is under active development**; next steps are a DiffTest reference model and the 5-stage pipeline with forwarding and hazard handling.
 
-**状态：持续开发中。** 单周期核已完成（2026-10-23），正在推进验证基础设施和五级流水。进度见下面的[路线图](#路线图)，最后更新：2026-10-23。
+**状态：持续开发中。** 单周期核已完成（2026-10-23），已接入 FST 波形和官方 riscv-tests（2026-10-25），正在推进 DiffTest 和五级流水。进度见下面的[路线图](#路线图)，最后更新：2026-10-25。
 
 作者：罗文轩，中国科学院大学电子信息专业在读硕士研究生。
 
@@ -17,7 +18,8 @@
 |---|---|---|
 | 处理器 RTL：ALU、寄存器堆、立即数生成、译码器、访存单元、单周期顶层 | `rtl/*.sv`（`core_pkg.sv` 的类型定义除外） | **本人手写** |
 | 设计决策、调试定位、综合结果分析 | — | **本人** |
-| 测试平台、仿真存储器、Makefile、测试程序 | `sim/`、`sw/`、`Makefile`、`rtl/core_pkg.sv` | 借助 AI（Claude）编写，本人阅读理解并使用 |
+| 测试平台、仿真存储器、Makefile、测试程序、riscv-tests 运行环境与回归脚本 | `sim/`、`sw/`、`Makefile`、`rtl/core_pkg.sv` | 借助 AI（Claude）编写，本人阅读理解并使用 |
+| riscv-tests 测试本体 | 官方仓库 [riscv-software-src/riscv-tests](https://github.com/riscv-software-src/riscv-tests)（BSD 许可），不改动 | 第三方 |
 
 处理器核心逻辑全部自己写：AI 只讲原理、给提示、审查代码，不提供 RTL 实现。验证基础设施用 AI 加快搭建，把时间集中在微架构本身。每次提交的信息里都写明了这一分工。
 
@@ -30,13 +32,16 @@
 3. **lint 零警告**：`verilator --lint-only -Wall`。
 4. **综合**：Yosys 综合，记录单元数和最长逻辑深度，用数字评估面积和时序。
 
-## 当前成果：单周期核
+## 当前成果：单周期核与验证
 
 | 项目 | 结果 |
 |---|---|
 | 指令集 | RV32I 全部 40 条基础指令；非法编码（保留 opcode、未定义 funct3/funct7、M 扩展、CSR 等）检测为 illegal |
 | 单元测试 | 6 组全部通过：ALU 201,960 例，寄存器堆 100,036 例（含随机初值），立即数生成 1,000,178 例，译码器 310,666 例（覆盖 40 条指令），访存单元 200,020 例 |
 | 整核测试 | 5 个程序全部通过：算术逻辑、分支跳转、字节/半字访存、C 程序 hello、C 程序 sum（1+…+100，循环在核上真实执行） |
+| 官方测试集 | riscv-tests rv32ui 共 42 个：**跑 40 个，全部通过**。另 2 个暂不跑：`fence_i`（Zifencei 扩展，不在 RV32I）、`ma_data`（非对齐访存，规范允许不支持并改为触发异常，核目前没有异常机制） |
+| 变异测试 | 注入 14 种典型 RTL 错误：riscv-tests 抓住 13 种；漏掉的“jalr 不清最低位”由自写的 `t2_branch` 抓住；“x0 当普通寄存器”只有 riscv-tests 能抓住（自写程序全部漏掉） |
+| 调试手段 | 逐条指令 trace（PC、机器码、写回、访存）；FST 波形（GTKWave 中枚举信号显示名字）；可指定 RTL 副本跑回归，用于注入 bug 练习定位 |
 | lint | 6 个模块 `-Wall` 零警告 |
 | 综合（Yosys，`-noabc`） | 整核 6,282 单元、1,024 个触发器、最长逻辑深度 59 |
 
@@ -75,12 +80,13 @@ mycore/
 │   └── core_top.sv       单周期顶层
 ├── sim/                  验证基础设施（AI 辅助）
 │   ├── unit/             各模块的随机对拍测试平台（C++）
-│   ├── core/             整核仿真：存储器模型、soc_top、测试平台、hex 转换脚本
+│   ├── core/             整核仿真：存储器模型、soc_top、测试平台、hex 转换、riscv-tests 回归脚本
 │   └── smoke/            工具链冒烟测试
 ├── sw/
 │   ├── tests/            汇编测试程序 t1_alu / t2_branch / t3_mem
 │   ├── hello/  sum/      C 测试程序与链接脚本
-│   └── common/           仿真用启动代码
+│   ├── common/           仿真用启动代码
+│   └── riscv-tests-env/  riscv-tests 的最小运行环境（不用 CSR，结束时 a0 + ebreak 报告结果）
 └── Makefile
 ```
 
@@ -92,11 +98,16 @@ mycore/
 - RISC-V GCC 工具链，前缀默认 `riscv64-unknown-elf-`（`-march=rv32i -mabi=ilp32`），可用 `RISCV_PREFIX=` 覆盖
 - Python 3
 - 综合可选：带 slang 前端的 Yosys（开发使用 `yowasp-yosys` 0.69）
+- 波形可选：lz4 头文件与库（FST 压缩用，路径由 `LZ4_DIR` 指定）、GTKWave
+- 官方测试可选：[riscv-tests](https://github.com/riscv-software-src/riscv-tests)，路径由 `RISCV_TESTS` 指定
 
 ```bash
 make test-unit                    # 6 组模块单元测试
 make test-core                    # 编译整核并跑 5 个测试程序
 make run PROG=sum TRACE=1         # 跑单个程序，逐条打印 PC、指令、写回值
+make isa                          # riscv-tests rv32ui 回归，失败时给出测试号，退出码非 0
+make isa-run T=rv32ui-p-add       # 只跑一个 riscv-tests
+make wave PROG=t2_branch          # 生成 FST 波形 build/wave/t2_branch.fst（isa-wave T=... 同理）
 make lint                         # verilator -Wall
 make synth SYNTH_TOP=core_top     # Yosys 综合，输出单元数与最长深度
 ```
@@ -118,8 +129,8 @@ CORE: ebreak，共 25 条指令，停在 pc=80000064 inst=00100073，a0 = 000000
   - [x] 立即数生成、译码器（L4）
   - [x] 访存单元、单周期顶层，整核跑通 C 程序（L5）
 - [ ] **阶段 2：验证基础设施**（计划至 2026-11-02）
-  - [ ] FST 波形与调试流程（L6）
-  - [ ] 接入官方 riscv-tests（rv32ui）（L7）
+  - [x] FST 波形与调试流程（L6，2026-10-25）
+  - [x] 接入官方 riscv-tests（rv32ui 42 个中跑 40 个，全部通过）与变异测试（L7，2026-10-25）
   - [ ] DiffTest：C 参考模型逐条比对 PC 和寄存器，itrace（L8）
 - [ ] **阶段 3：五级流水**（计划至 2026-11-16）
   - [ ] IF/ID/EX/MEM/WB 流水线寄存器（L9、L10）

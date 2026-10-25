@@ -8,11 +8,14 @@ MARCH   := -march=rv32i -mabi=ilp32
 #   make wave PROG=t2_branch RTL_DIR=/tmp/rtl_bug BUILD=/tmp/build_bug
 BUILD   ?= build
 RTL_DIR ?= rtl
+# 本项目自己装的工具（lz4、riscv-tests……）所在目录。env-riscv.sh 会设置 RISCV_TOOLS；
+# 不在干净环境里用 make 时退回这个默认值
+RISCV_TOOLS ?= $(HOME)/A_LwxFiles/EngineerTools/Related_ToolChain_4_RISCV_CoreProject
 
 VFLAGS := --cc --exe --build -Wall -Wno-UNUSEDSIGNAL -j 4 -I$(RTL_DIR)
 
 .PHONY: smoke hello clean test-alu test-regfile test-unit test-regfile-xinit test-imm test-decoder test-lsu \
-        core progs run test-core lint synth core-wave wave
+        core progs run test-core lint synth core-wave wave isa isa-progs isa-run isa-wave
 
 # 单元测试：make test-alu / test-regfile / test-imm / test-decoder / test-lsu；make test-unit 全部都跑
 test-alu:
@@ -96,6 +99,8 @@ LDS      := sw/hello/link.ld
 SW_FLAGS := $(MARCH) -nostdlib -ffreestanding -Wl,--build-id=none -Wl,--no-warn-rwx-segments -T $(LDS)
 
 core:
+	@if grep -qs 'EngineerTools/verilator-5.052/' $(BUILD)/core/*.d; then \
+	  echo "$(BUILD)/core 是工具目录搬家（2026-10-25）之前编译的，里面还记着旧路径，先删掉再编：rm -rf $(BUILD)/core"; exit 1; fi
 	mkdir -p $(BUILD)/core
 	verilator $(VFLAGS) --Mdir $(BUILD)/core --top-module soc_top \
 	  $(SIM_SRCS) sim/core/tb_core.cpp
@@ -103,12 +108,14 @@ core:
 # ---------------- 波形（L6） ----------------
 # make core-wave：编译带 FST 波形的整核模型 build/core_wave/Vsoc_top（单独目录，不影响 make core）
 # make wave PROG=t2_branch [TRACE=1] [EXPECT=e]：跑一个程序并生成 build/wave/t2_branch.fst；再用 gtkwave 打开
-# FST 压缩要用 lz4：头文件和库装在 EngineerTools 下，没有写进系统目录
-LZ4_DIR ?= $(HOME)/A_LwxFiles/EngineerTools/lz4-1.9.3
+# FST 压缩要用 lz4：头文件和库装在 RISCV_TOOLS 下，没有写进系统目录
+LZ4_DIR ?= $(RISCV_TOOLS)/lz4-1.9.3
 WAVE_FLAGS := --trace-fst --trace-structs \
   -CFLAGS -I$(LZ4_DIR)/include -LDFLAGS "-L$(LZ4_DIR)/lib -Wl,-rpath,$(LZ4_DIR)/lib"
 
 core-wave:
+	@if grep -qs 'EngineerTools/verilator-5.052/' $(BUILD)/core_wave/*.d; then \
+	  echo "$(BUILD)/core_wave 是工具目录搬家（2026-10-25）之前编译的，里面还记着旧路径，先删掉再编：rm -rf $(BUILD)/core_wave"; exit 1; fi
 	mkdir -p $(BUILD)/core_wave
 	verilator $(VFLAGS) $(WAVE_FLAGS) --Mdir $(BUILD)/core_wave --top-module soc_top \
 	  $(SIM_SRCS) sim/core/tb_core.cpp
@@ -146,6 +153,55 @@ TRACE  ?=
 EXPECT ?=
 run: core progs
 	$(BUILD)/core/Vsoc_top +prog=$(PROG_DIR)/$(PROG).hex $(if $(TRACE),+trace) $(if $(EXPECT),+expect_a0=$(EXPECT))
+
+# ---------------- 官方测试集 riscv-tests（L7） ----------------
+# make isa：编译 rv32ui 的全部测试并跑一遍，汇总 PASS / FAIL
+# make isa-run T=rv32ui-p-add [TRACE=1]：只跑一个（调试用）
+# 测试源码在 RISCV_TESTS（官方仓库，克隆在 RISCV_TOOLS 下，不改它）；
+# 运行环境换成 sw/riscv-tests-env/ 里的最小环境：不用 CSR，结束时 a0 = 0 表示通过
+RISCV_TESTS ?= $(RISCV_TOOLS)/riscv-tests
+ISA_ENV  := sw/riscv-tests-env
+ISA_DIR  := $(BUILD)/isa
+# 不在本阶段范围内、暂不跑的两个（原因见 L7 讲义第 6 节）：
+#   fence_i：fence.i 属于 Zifencei 扩展，你的译码器按 RV32I 把它当非法指令
+#   ma_data：非对齐访存。规范允许硬件不支持、改为触发异常，你的核目前没有异常机制
+ISA_SKIP := fence_i ma_data
+ISA_ALL  := $(shell sed -n '/rv32ui_sc_tests = /,/^$$/p' $(RISCV_TESTS)/isa/rv32ui/Makefrag 2>/dev/null | grep -v '=' | tr -d '\\')
+ISA_TESTS := $(filter-out $(ISA_SKIP),$(ISA_ALL))
+ISA_FLAGS := -march=rv32i -mabi=ilp32 -static -mcmodel=medany -nostdlib -nostartfiles \
+  -Wl,--build-id=none -Wl,--no-warn-rwx-segments \
+  -I$(ISA_ENV) -I$(RISCV_TESTS)/isa/macros/scalar -T$(ISA_ENV)/link.ld
+
+$(ISA_DIR)/rv32ui-p-%.elf: $(RISCV_TESTS)/isa/rv32ui/%.S $(ISA_ENV)/riscv_test.h $(ISA_ENV)/link.ld
+	@mkdir -p $(ISA_DIR)
+	$(CC) $(ISA_FLAGS) $< -o $@
+
+$(ISA_DIR)/%.hex: $(ISA_DIR)/%.elf
+	$(OBJDUMP) -d $< > $(ISA_DIR)/$*.dis
+	$(OBJCOPY) -O binary $< $(ISA_DIR)/$*.bin
+	python3 sim/core/bin2hex.py $(ISA_DIR)/$*.bin $@
+
+.PRECIOUS: $(ISA_DIR)/%.elf
+
+isa-progs:
+	@test -d $(RISCV_TESTS)/isa/rv32ui || { echo "找不到 riscv-tests：$(RISCV_TESTS)（见 L7 讲义第 3 节）"; exit 1; }
+	@$(MAKE) --no-print-directory $(addprefix $(ISA_DIR)/rv32ui-p-,$(addsuffix .hex,$(ISA_TESTS)))
+
+isa: core isa-progs
+	@bash sim/core/run_isa.sh $(BUILD)/core/Vsoc_top $(ISA_DIR) $(addprefix rv32ui-p-,$(ISA_TESTS))
+	@echo "（暂不跑：$(ISA_SKIP)）"
+
+T ?= rv32ui-p-simple
+isa-run: core isa-progs
+	$(BUILD)/core/Vsoc_top +prog=$(ISA_DIR)/$(T).hex +expect_a0=0 +max=500000 $(if $(TRACE),+trace)
+
+# make isa-wave T=rv32ui-p-blt [TRACE=1]：跑一个 riscv-tests 并生成 $(BUILD)/wave/$(T).fst
+# 只编译这一个测试（不像 isa-run 那样先把 40 个都编一遍）；FAIL 时也照样生成波形
+isa-wave: core-wave $(ISA_DIR)/$(T).hex
+	mkdir -p $(BUILD)/wave
+	-$(BUILD)/core_wave/Vsoc_top +prog=$(ISA_DIR)/$(T).hex +wave=$(BUILD)/wave/$(T).fst +expect_a0=0 +max=500000 $(if $(TRACE),+trace)
+	@echo "波形：$(BUILD)/wave/$(T).fst    查看：gtkwave $(BUILD)/wave/$(T).fst &"
+	@echo "第 n 条指令（trace 最左边的数）在波形里的时刻：5 + 2n（clk 低，信号已稳定）"
 
 # 每个程序的预期结果：a0 的值，以及（t3_mem）存储器里三个字的值
 # hello 在 -O2 下被编译器算成了常数 55，循环不在核上跑；sum 的 n 来自 volatile，循环真的执行 100 次

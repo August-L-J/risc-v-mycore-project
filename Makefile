@@ -15,7 +15,8 @@ RISCV_TOOLS ?= $(HOME)/A_LwxFiles/EngineerTools/Related_ToolChain_4_RISCV_CorePr
 VFLAGS := --cc --exe --build -Wall -Wno-UNUSEDSIGNAL -j 4 -I$(RTL_DIR)
 
 .PHONY: smoke hello clean test-alu test-regfile test-unit test-regfile-xinit test-imm test-decoder test-lsu \
-        core progs run test-core lint synth core-wave wave isa isa-progs isa-run isa-wave
+        core progs run test-core lint synth core-wave wave isa isa-progs isa-run isa-wave \
+        difftest diff diff-isa diff-all
 
 # 单元测试：make test-alu / test-regfile / test-imm / test-decoder / test-lsu；make test-unit 全部都跑
 test-alu:
@@ -181,7 +182,8 @@ $(ISA_DIR)/%.hex: $(ISA_DIR)/%.elf
 	$(OBJCOPY) -O binary $< $(ISA_DIR)/$*.bin
 	python3 sim/core/bin2hex.py $(ISA_DIR)/$*.bin $@
 
-.PRECIOUS: $(ISA_DIR)/%.elf
+# elf 是 .S → .elf → .hex 链条的中间文件，make 默认用完就删；保留它，objdump 和 DiffTest 都要用
+.SECONDARY: $(addprefix $(ISA_DIR)/rv32ui-p-,$(addsuffix .elf,$(ISA_ALL)))
 
 isa-progs:
 	@test -d $(RISCV_TESTS)/isa/rv32ui || { echo "找不到 riscv-tests：$(RISCV_TESTS)（见 L7 讲义第 3 节）"; exit 1; }
@@ -202,6 +204,31 @@ isa-wave: core-wave $(ISA_DIR)/$(T).hex
 	-$(BUILD)/core_wave/Vsoc_top +prog=$(ISA_DIR)/$(T).hex +wave=$(BUILD)/wave/$(T).fst +expect_a0=0 +max=500000 $(if $(TRACE),+trace)
 	@echo "波形：$(BUILD)/wave/$(T).fst    查看：gtkwave $(BUILD)/wave/$(T).fst &"
 	@echo "第 n 条指令（trace 最左边的数）在波形里的时刻：5 + 2n（clk 低，信号已稳定）"
+
+# ---------------- DiffTest（L8） ----------------
+# 核和参考模型（sim/difftest/ref_rv32i.h）同步执行，每条指令比对一次，第一处不一致就停
+# make difftest：编译 build/difftest/Vsoc_top（和 build/core 分开，互不影响）
+# make diff PROG=t1_alu [ITRACE=1]：跑一个自写程序
+# make diff-isa T=rv32ui-p-add [ITRACE=1]：跑一个 riscv-tests
+# make diff-all：自写 5 个 + riscv-tests 40 个全部过一遍 DiffTest
+difftest:
+	@if grep -qs 'EngineerTools/verilator-5.052/' $(BUILD)/difftest/*.d; then \
+	  echo "$(BUILD)/difftest 是工具目录搬家之前编译的，先删掉再编：rm -rf $(BUILD)/difftest"; exit 1; fi
+	mkdir -p $(BUILD)/difftest
+	verilator $(VFLAGS) -Isim/difftest -CFLAGS -I$(CURDIR)/sim/difftest --Mdir $(BUILD)/difftest --top-module soc_top \
+	  $(SIM_SRCS) sim/difftest/tb_difftest.cpp
+
+ITRACE ?=
+diff: difftest progs
+	$(BUILD)/difftest/Vsoc_top +prog=$(PROG_DIR)/$(PROG).hex $(if $(ITRACE),+itrace)
+
+diff-isa: difftest $(ISA_DIR)/$(T).hex
+	$(BUILD)/difftest/Vsoc_top +prog=$(ISA_DIR)/$(T).hex $(if $(ITRACE),+itrace)
+
+diff-all: difftest progs isa-progs
+	@bash sim/difftest/run_diff.sh $(BUILD)/difftest/Vsoc_top \
+	  $(addprefix $(PROG_DIR)/,$(addsuffix .hex,$(TESTS) hello sum)) \
+	  $(addprefix $(ISA_DIR)/rv32ui-p-,$(addsuffix .hex,$(ISA_TESTS)))
 
 # 每个程序的预期结果：a0 的值，以及（t3_mem）存储器里三个字的值
 # hello 在 -O2 下被编译器算成了常数 55，循环不在核上跑；sum 的 n 来自 volatile，循环真的执行 100 次
